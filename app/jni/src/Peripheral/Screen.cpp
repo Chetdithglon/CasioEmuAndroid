@@ -39,45 +39,105 @@
 #ifdef __ANDROID__
 #include <jni.h>
 #include <android/log.h>
+#include <android/api-level.h>
 
-// Function to check storage permission
+int getAndroidApiLevel() {
+    JNIEnv* env = (JNIEnv*)SDL_AndroidGetJNIEnv();
+    jclass versionClass = env->FindClass("android/os/Build$VERSION");
+    jfieldID sdkIntFieldID = env->GetStaticFieldID(versionClass, "SDK_INT", "I");
+    int sdkInt = env->GetStaticIntField(versionClass, sdkIntFieldID);
+    env->DeleteLocalRef(versionClass);
+    return sdkInt;
+}
+
 bool checkStoragePermission() {
     JNIEnv* env = (JNIEnv*)SDL_AndroidGetJNIEnv();
     jobject activity = (jobject)SDL_AndroidGetActivity();
     jclass activityClass = env->GetObjectClass(activity);
-
-    // Check if we have permission
+    
+    // Method to check permission
     jmethodID checkSelfPermissionMethod = env->GetMethodID(activityClass, "checkSelfPermission", "(Ljava/lang/String;)I");
-    jstring permissionString = env->NewStringUTF("android.permission.WRITE_EXTERNAL_STORAGE");
+    
+    int apiLevel = getAndroidApiLevel();
+    jstring permissionString;
+    
+    // For Android 13+ (API 33+), use READ_MEDIA_IMAGES permission
+    if (apiLevel >= 33) {
+        permissionString = env->NewStringUTF("android.permission.READ_MEDIA_IMAGES");
+    } else {
+        // For older Android versions, use WRITE_EXTERNAL_STORAGE
+        permissionString = env->NewStringUTF("android.permission.WRITE_EXTERNAL_STORAGE");
+    }
+    
     jint permission = env->CallIntMethod(activity, checkSelfPermissionMethod, permissionString);
     env->DeleteLocalRef(permissionString);
-
     env->DeleteLocalRef(activityClass);
     env->DeleteLocalRef(activity);
-
+    
     return permission == 0; // PERMISSION_GRANTED = 0
 }
 
-// Function to request storage permission
 void requestStoragePermission() {
     JNIEnv* env = (JNIEnv*)SDL_AndroidGetJNIEnv();
     jobject activity = (jobject)SDL_AndroidGetActivity();
     jclass activityClass = env->GetObjectClass(activity);
-
-    // Request permission
+    
+    // Request permission method
     jmethodID requestPermissionsMethod = env->GetMethodID(activityClass, "requestPermissions", "([Ljava/lang/String;I)V");
     
-    // Create string array with one element
+    int apiLevel = getAndroidApiLevel();
+    jstring permissionString;
+    
+    // For Android 13+ (API 33+), use READ_MEDIA_IMAGES permission
+    if (apiLevel >= 33) {
+        permissionString = env->NewStringUTF("android.permission.READ_MEDIA_IMAGES");
+    } else {
+        // For older Android versions, use WRITE_EXTERNAL_STORAGE
+        permissionString = env->NewStringUTF("android.permission.WRITE_EXTERNAL_STORAGE");
+    }
+    
     jobjectArray permissionArray = env->NewObjectArray(1, 
         env->FindClass("java/lang/String"), 
-        env->NewStringUTF("android.permission.WRITE_EXTERNAL_STORAGE"));
-
-    // Request code can be any number
+        permissionString);
+    
     env->CallVoidMethod(activity, requestPermissionsMethod, permissionArray, 1);
-
+    
+    env->DeleteLocalRef(permissionString);
     env->DeleteLocalRef(permissionArray);
     env->DeleteLocalRef(activityClass);
     env->DeleteLocalRef(activity);
+}
+
+bool saveImageToMediaStore(const void* pixels, int width, int height, int pitch, const char* filename) {
+    JNIEnv* env = (JNIEnv*)SDL_AndroidGetJNIEnv();
+    jobject activity = (jobject)SDL_AndroidGetActivity();
+    
+    // Create a Java direct ByteBuffer from the pixel data
+    jobject byteBuffer = env->NewDirectByteBuffer((void*)pixels, height * pitch);
+    
+    // Call a Java method to handle saving to MediaStore
+    jclass activityClass = env->GetObjectClass(activity);
+    jmethodID saveImageMethod = env->GetMethodID(activityClass, "saveImageToMediaStore", 
+        "(Ljava/nio/ByteBuffer;IIILjava/lang/String;)Z");
+    
+    // If the method doesn't exist, we need to add it to the Java side
+    if (saveImageMethod == NULL) {
+        SDL_Log("Error: saveImageToMediaStore method not found. Please add it to your Java activity.");
+        env->DeleteLocalRef(byteBuffer);
+        env->DeleteLocalRef(activityClass);
+        env->DeleteLocalRef(activity);
+        return false;
+    }
+    
+    jstring jfilename = env->NewStringUTF(filename);
+    jboolean result = env->CallBooleanMethod(activity, saveImageMethod, byteBuffer, width, height, pitch, jfilename);
+    
+    env->DeleteLocalRef(jfilename);
+    env->DeleteLocalRef(byteBuffer);
+    env->DeleteLocalRef(activityClass);
+    env->DeleteLocalRef(activity);
+    
+    return result;
 }
 #endif
 
@@ -1049,12 +1109,18 @@ n为行扫描计数，[0xF03B] = ( ( n / ( [0xF036] == 0 ? 64 : [0xF035] ) ) % 2
             std::time_t t = std::time(nullptr);
             std::tm tm = *std::localtime(&t);
             std::ostringstream filename;
+            
         #ifdef __ANDROID__
-            filename << "/storage/emulated/0/Pictures/";
-        #endif
+            // For Android, we'll just use the filename part without the path
+            // as the MediaStore API will handle the storage location
             filename << "screenshot-" 
                      << std::put_time(&tm, "%Y-%m-%d-%H-%M-%S-") << std::rand() % 1000 
                      << ".png";
+        #else
+            filename << "screenshot-" 
+                     << std::put_time(&tm, "%Y-%m-%d-%H-%M-%S-") << std::rand() % 1000 
+                     << ".png";
+        #endif
         
             // Calculate the bounding box of the rendering area from both sprite and pixel rectangles  
             int minX = INT_MAX, minY = INT_MAX, maxX = INT_MIN, maxY = INT_MIN;
@@ -1082,6 +1148,7 @@ n为行扫描计数，[0xF03B] = ( ( n / ( [0xF036] == 0 ? 64 : [0xF035] ) ) % 2
             // Create a surface to capture the screen content
             SDL_Surface* screenSurface = SDL_CreateRGBSurface(0, captureWidth, captureHeight, 32,
                 0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
+            
             if (screenSurface != nullptr) {
                 // Define the area to capture
                 SDL_Rect captureRect = {minX, minY, captureWidth, captureHeight};
@@ -1089,11 +1156,35 @@ n为行扫描计数，[0xF03B] = ( ( n / ( [0xF036] == 0 ? 64 : [0xF035] ) ) % 2
                 // Copy the renderer to the surface
                 if (SDL_RenderReadPixels(renderer, &captureRect, SDL_PIXELFORMAT_RGBA32, 
                     screenSurface->pixels, screenSurface->pitch) == 0) {
-                    // Save the surface as a PNG file using SDL_image
+                    
+        #ifdef __ANDROID__
+                    int apiLevel = getAndroidApiLevel();
+                    // For Android 10+, use MediaStore API
+                    if (apiLevel >= 29) {
+                        auto str = filename.str();
+                        bool success = saveImageToMediaStore(screenSurface->pixels, screenSurface->w, screenSurface->h, screenSurface->pitch, str.c_str());
+                        if (!success) {
+                            SDL_Log("Error saving screenshot using MediaStore API");
+                        } else {
+                            SDL_Log("Screenshot saved successfully with MediaStore API");
+                        }
+                    } else {
+                        // For older Android, use the traditional file path
+                        std::string fullPath = "/storage/emulated/0/Pictures/" + filename.str();
+                        if (IMG_SavePNG(screenSurface, fullPath.c_str()) != 0) {
+                            SDL_Log("Error saving screenshot: %s", IMG_GetError());
+                        } else {
+                            SDL_Log("Screenshot saved to %s", fullPath.c_str());
+                        }
+                    }
+        #else
                     auto str = filename.str();
                     if (IMG_SavePNG(screenSurface, str.c_str()) != 0) {
                         SDL_Log("Error saving screenshot: %s", IMG_GetError());
+                    } else {
+                        SDL_Log("Screenshot saved to %s", str.c_str());
                     }
+        #endif
                 } else {
                     SDL_Log("Error capturing screen pixels: %s", SDL_GetError());
                 }
@@ -1101,7 +1192,6 @@ n为行扫描计数，[0xF03B] = ( ( n / ( [0xF036] == 0 ? 64 : [0xF035] ) ) % 2
             } else {
                 SDL_Log("Error creating surface: %s", SDL_GetError());
             }
-            SDL_Log("Saved screenshot!");
         }
 
         void UpdatePreview(SDL_Renderer* renderer, ScreenMirror* sm, const std::vector<SDL_Rect>& spriteRects, const std::vector<SDL_Rect>& pixelRects) {

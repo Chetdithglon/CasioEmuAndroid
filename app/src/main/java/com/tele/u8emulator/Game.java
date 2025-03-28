@@ -1,16 +1,27 @@
 package com.tele.u8emulator;
 
-import android.content.Context;
 import android.os.Vibrator;
-import android.content.Intent;
+import android.os.Build;
 import android.app.Activity;
 import android.net.Uri;
 import android.database.Cursor;
 import android.provider.DocumentsContract;
 import android.provider.OpenableColumns;
+import android.provider.MediaStore;
 import android.content.pm.PackageManager;
+import android.content.ContentResolver;
+import android.content.ContentValues;
+import android.content.Context;
+import android.content.Intent;
 import android.util.Log;
+import android.os.Build;
 import org.libsdl.app.SDLActivity;
+import android.graphics.Bitmap;
+import android.widget.Toast;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.nio.ByteBuffer;
+
 
 public class Game extends SDLActivity {
     private static final String TAG = "Game";
@@ -74,6 +85,59 @@ public class Game extends SDLActivity {
         }
     }
 
+    public boolean saveImageToMediaStore(ByteBuffer buffer, int width, int height, int pitch, String filename) {
+        ContentValues values = new ContentValues();
+        values.put(MediaStore.Images.Media.DISPLAY_NAME, filename);
+        values.put(MediaStore.Images.Media.MIME_TYPE, "image/png");
+        
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            values.put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures");
+            values.put(MediaStore.Images.Media.IS_PENDING, 1);
+        }
+        
+        ContentResolver resolver = getContentResolver();
+        Uri imageUri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
+        
+        if (imageUri == null) {
+            Log.e("SDL", "Failed to create new MediaStore record.");
+            return false;
+        }
+        
+        try {
+            OutputStream stream = resolver.openOutputStream(imageUri);
+            if (stream == null) {
+                Log.e("SDL", "Failed to open output stream.");
+                return false;
+            }
+            
+            // Create a bitmap from the buffer
+            Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+            buffer.rewind();
+            bitmap.copyPixelsFromBuffer(buffer);
+            
+            // Compress and save the bitmap
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream);
+            stream.close();
+            
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                values.clear();
+                values.put(MediaStore.Images.Media.IS_PENDING, 0);
+                resolver.update(imageUri, values, null, null);
+            }
+            
+            // Show a toast notification
+            runOnUiThread(() -> Toast.makeText(this, "Screenshot saved to Pictures folder", Toast.LENGTH_SHORT).show());
+            
+            return true;
+        } catch (IOException e) {
+            Log.e("SDL", "Error saving bitmap: " + e.getMessage());
+            
+            // If there was an error, delete the new media item
+            resolver.delete(imageUri, null, null);
+            return false;
+        }
+    }
+
     @Override
     public void onRequestPermissionsResult(int requestCode,
                                          String[] permissions,
@@ -90,19 +154,23 @@ public class Game extends SDLActivity {
             }
 
             if (allGranted) {
-                if (pendingUri != null && pendingData != null) {
-                    exportData(pendingData, pendingUri);
-                } else if (pendingRequestCode != -1) {
-                    handlePendingRequest();
-                }
+                processPendingOperations();
             } else {
                 onExportFailed();
             }
-            
-            pendingUri = null;
-            pendingData = null;
-            pendingRequestCode = -1;
         }
+    }
+
+    private void processPendingOperations() {
+        if (pendingUri != null && pendingData != null) {
+            exportData(pendingData, pendingUri);
+        } else if (pendingRequestCode != -1) {
+            handlePendingRequest();
+        }
+        
+        pendingUri = null;
+        pendingData = null;
+        pendingRequestCode = -1;
     }
 
     private void handlePendingRequest() {
@@ -135,11 +203,25 @@ public class Game extends SDLActivity {
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         
+        if (requestCode == PermissionManager.MANAGE_STORAGE_REQUEST_CODE) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                if (PermissionManager.hasAllPermissions(this)) {
+                    processPendingOperations();
+                } else {
+                    Log.e(TAG, "User denied MANAGE_EXTERNAL_STORAGE permission");
+                    onExportFailed();
+                    pendingUri = null;
+                    pendingData = null;
+                    pendingRequestCode = -1;
+                }
+            }
+            return;
+        }
+        
         if (resultCode == Activity.RESULT_OK && data != null && data.getData() != null) {
             Uri uri = data.getData();
             Log.d(TAG, "File URI: " + uri.toString());
-            
-            // Take persistable permission
+
             try {
                 final int takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION |
                                     Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
