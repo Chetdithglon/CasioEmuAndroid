@@ -48,24 +48,13 @@ jobs:
         retention-days: 1
         compression-level: 0
 
-    - name: Create GitHub Release
-      id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Create GitHub Release and Upload APK
+      uses: softprops/action-gh-release@v1
       with:
         tag_name: 'ci'
-        release_name: 'Autorelease'
-        body: ''
+        name: 'Autorelease'
+        files: app/build/outputs/apk/release/app-release.apk
         draft: false
         prerelease: true
-
-    - name: Upload APK to Release
-      uses: actions/upload-release-asset@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: app/build/outputs/apk/release/app-release.apk
-        asset_name: app-release.apk
-        asset_content_type: application/vnd.android.package-archive
