@@ -33,6 +33,7 @@ private:
     std::mutex injectionMutex;
     bool needsReload;
     std::atomic<bool> isReloading;
+    std::atomic<bool> isShuttingDown;
     std::string lastModifiedTime;
     std::string injectionFilePath;
     std::unordered_map<std::string, uint32_t> addressCache;

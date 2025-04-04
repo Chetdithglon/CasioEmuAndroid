@@ -22,7 +22,7 @@
 #include <chrono>
 #include "Theme.h"
 
-Injector::Injector() : UIWindow("Rop"), needsReload(false), isReloading(false) {
+Injector::Injector() : UIWindow("Rop"), needsReload(false), isReloading(false), isShuttingDown(false) {
     injectors.push_back(InjectorData());
     injectionFilePath = GetThemeSettings().injectionFilePath;
     InitCustomInjectionsFile();
@@ -30,6 +30,9 @@ Injector::Injector() : UIWindow("Rop"), needsReload(false), isReloading(false) {
 }
 
 Injector::~Injector() {
+    isShuttingDown.store(true);
+    
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
 }
 
 std::string Injector::GetFileModifiedTime(const std::string& filepath) {
@@ -43,9 +46,26 @@ std::string Injector::GetFileModifiedTime(const std::string& filepath) {
 }
 
 void Injector::AsyncLoadCustomInjections() {
-    std::thread([this]() {
-        BackgroundReload();
-    }).detach();
+    try {
+        if (isShuttingDown.load()) {
+            return;
+        }
+        std::thread t([this]() {
+            try {
+                if (!isShuttingDown.load()) {
+                    BackgroundReload();
+                }
+            } catch (...) {
+                // Catch exceptions
+            }
+        });
+        
+        if (t.joinable()) {
+            t.detach();
+        }
+    } catch (...) {
+        // Thread creation error handling
+    }
 }
 
 void Injector::TrimString(std::string& str) {
@@ -97,36 +117,68 @@ void Injector::InitCustomInjectionsFile() {
 }
 
 void Injector::BackgroundReload() {
-    if (isReloading.exchange(true)) {
-        return; // If already reloading, return
+    try {
+        if (isShuttingDown.load()) {
+            return;
+        }
+        
+        if (isReloading.exchange(true)) {
+            return; // If it is reloading then exit
+        }
+        
+        std::string currentModTime;
+        try {
+            currentModTime = GetFileModifiedTime(injectionFilePath);
+        } catch (...) {
+            isReloading.store(false);
+            return;
+        }
+        
+        if (currentModTime == lastModifiedTime && !needsReload) {
+            isReloading.store(false);
+            return;
+        }
+        
+        if (isShuttingDown.load()) {
+            isReloading.store(false);
+            return;
+        }
+        
+        std::string content;
+        try {
+            std::ifstream file(injectionFilePath, std::ios::binary);
+            if (!file.is_open()) {
+                isReloading.store(false);
+                return;
+            }
+            
+            content = std::string(
+                (std::istreambuf_iterator<char>(file)),
+                std::istreambuf_iterator<char>()
+            );
+            file.close();
+        } catch (...) {
+            isReloading.store(false);
+            return;
+        }
+        
+        if (isShuttingDown.load()) {
+            isReloading.store(false);
+            return;
+        }
+        
+        try {
+            std::lock_guard<std::mutex> lock(injectionMutex);
+            if (ParseCustomInjections(content)) {
+                lastModifiedTime = currentModTime;
+                needsReload = false;
+            }
+        } catch (...) {
+            // Handling analysis errors
+        }
+    } catch (...) {
+        // Catch any exception
     }
-    
-    std::string currentModTime = GetFileModifiedTime(injectionFilePath);
-    
-    if (currentModTime == lastModifiedTime && !needsReload) {
-        isReloading.store(false);
-        return;
-    }
-    
-    std::ifstream file(injectionFilePath);
-    if (!file.is_open()) {
-        isReloading.store(false);
-        return;
-    }
-    
-    std::string content;
-    file.seekg(0, std::ios::end);
-    content.reserve(file.tellg());
-    file.seekg(0, std::ios::beg);
-    content.assign((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-    file.close();
-    
-    std::lock_guard<std::mutex> lock(injectionMutex);
-    if (ParseCustomInjections(content)) {
-        lastModifiedTime = currentModTime;
-        needsReload = false;
-    }
-    
     isReloading.store(false);
 }
 
@@ -388,15 +440,31 @@ void Injector::RenderCustomInjectTab(bool& show_info, std::string& info_msg) {
     
     ImGui::SameLine();
     if (ImGui::Button("Rop.ReloadCustomInjects"_lc)) {
-        if (!isReloading.load()) {
+        if (!isReloading.load() && !isShuttingDown.load()) {
             std::string currentFilePath = GetThemeSettings().injectionFilePath;
             if (currentFilePath != injectionFilePath) {
                 injectionFilePath = currentFilePath;
             }
             needsReload = true;
-            std::thread([this]() {
-                BackgroundReload();
-            }).detach();
+            
+            try {
+                std::thread t([this]() {
+                    try {
+                        if (!isShuttingDown.load()) {
+                            BackgroundReload();
+                        }
+                    } catch (...) {
+                        // Catch exceptions
+                    }
+                });
+                
+                if (t.joinable()) {
+                    t.detach();
+                }
+            } catch (...) {
+                // Thread creation error handling
+            }
+            
             info_msg = "Rop.CustomInjectReloading"_l;
             show_info = true;
         }
@@ -428,13 +496,28 @@ void Injector::RenderCustomInjectTab(bool& show_info, std::string& info_msg) {
         }
     }
     
-    if (autoCheckFileChanges && !isReloading.load()) {
+    if (autoCheckFileChanges && !isReloading.load() && !isShuttingDown.load()) {
         std::string currentModTime = GetFileModifiedTime(injectionFilePath);
         if (currentModTime != lastModifiedTime) {
             needsReload = true;
-            std::thread([this]() {
-                BackgroundReload();
-            }).detach();
+            
+            try {
+                std::thread t([this]() {
+                    try {
+                        if (!isShuttingDown.load()) {
+                            BackgroundReload();
+                        }
+                    } catch (...) {
+                        // Catch exceptions
+                    }
+                });
+                
+                if (t.joinable()) {
+                    t.detach();
+                }
+            } catch (...) {
+                // Thread creation error handling
+            }
         }
     }
 }
