@@ -41,73 +41,6 @@
 #include <android/log.h>
 #include <android/api-level.h>
 
-int getAndroidApiLevel() {
-    JNIEnv* env = (JNIEnv*)SDL_AndroidGetJNIEnv();
-    jclass versionClass = env->FindClass("android/os/Build$VERSION");
-    jfieldID sdkIntFieldID = env->GetStaticFieldID(versionClass, "SDK_INT", "I");
-    int sdkInt = env->GetStaticIntField(versionClass, sdkIntFieldID);
-    env->DeleteLocalRef(versionClass);
-    return sdkInt;
-}
-
-bool checkStoragePermission() {
-    JNIEnv* env = (JNIEnv*)SDL_AndroidGetJNIEnv();
-    jobject activity = (jobject)SDL_AndroidGetActivity();
-    jclass activityClass = env->GetObjectClass(activity);
-    
-    // Method to check permission
-    jmethodID checkSelfPermissionMethod = env->GetMethodID(activityClass, "checkSelfPermission", "(Ljava/lang/String;)I");
-    
-    int apiLevel = getAndroidApiLevel();
-    jstring permissionString;
-    
-    // For Android 13+ (API 33+), use READ_MEDIA_IMAGES permission
-    if (apiLevel >= 33) {
-        permissionString = env->NewStringUTF("android.permission.READ_MEDIA_IMAGES");
-    } else {
-        // For older Android versions, use WRITE_EXTERNAL_STORAGE
-        permissionString = env->NewStringUTF("android.permission.WRITE_EXTERNAL_STORAGE");
-    }
-    
-    jint permission = env->CallIntMethod(activity, checkSelfPermissionMethod, permissionString);
-    env->DeleteLocalRef(permissionString);
-    env->DeleteLocalRef(activityClass);
-    env->DeleteLocalRef(activity);
-    
-    return permission == 0; // PERMISSION_GRANTED = 0
-}
-
-void requestStoragePermission() {
-    JNIEnv* env = (JNIEnv*)SDL_AndroidGetJNIEnv();
-    jobject activity = (jobject)SDL_AndroidGetActivity();
-    jclass activityClass = env->GetObjectClass(activity);
-    
-    // Request permission method
-    jmethodID requestPermissionsMethod = env->GetMethodID(activityClass, "requestPermissions", "([Ljava/lang/String;I)V");
-    
-    int apiLevel = getAndroidApiLevel();
-    jstring permissionString;
-    
-    // For Android 13+ (API 33+), use READ_MEDIA_IMAGES permission
-    if (apiLevel >= 33) {
-        permissionString = env->NewStringUTF("android.permission.READ_MEDIA_IMAGES");
-    } else {
-        // For older Android versions, use WRITE_EXTERNAL_STORAGE
-        permissionString = env->NewStringUTF("android.permission.WRITE_EXTERNAL_STORAGE");
-    }
-    
-    jobjectArray permissionArray = env->NewObjectArray(1, 
-        env->FindClass("java/lang/String"), 
-        permissionString);
-    
-    env->CallVoidMethod(activity, requestPermissionsMethod, permissionArray, 1);
-    
-    env->DeleteLocalRef(permissionString);
-    env->DeleteLocalRef(permissionArray);
-    env->DeleteLocalRef(activityClass);
-    env->DeleteLocalRef(activity);
-}
-
 bool saveImageToMediaStore(const void* pixels, int width, int height, int pitch, const char* filename) {
     JNIEnv* env = (JNIEnv*)SDL_AndroidGetJNIEnv();
     jobject activity = (jobject)SDL_AndroidGetActivity();
@@ -115,7 +48,7 @@ bool saveImageToMediaStore(const void* pixels, int width, int height, int pitch,
     // Create a Java direct ByteBuffer from the pixel data
     jobject byteBuffer = env->NewDirectByteBuffer((void*)pixels, height * pitch);
     
-    // Call a Java method to handle saving to MediaStore
+    // Call the Java method to handle saving to MediaStore
     jclass activityClass = env->GetObjectClass(activity);
     jmethodID saveImageMethod = env->GetMethodID(activityClass, "saveImageToMediaStore", 
         "(Ljava/nio/ByteBuffer;IIILjava/lang/String;)Z");
@@ -1096,32 +1029,15 @@ n为行扫描计数，[0xF03B] = ( ( n / ( [0xF036] == 0 ? 64 : [0xF035] ) ) % 2
         }
         // Function to capture the current screen and save it as a PNG file
         void CaptureScreenshot(SDL_Renderer* renderer, const std::vector<SDL_Rect>& spriteRects, const std::vector<SDL_Rect>& pixelRects) {
-        #ifdef __ANDROID__
-            // Check permission first
-            if (!checkStoragePermission()) {
-                SDL_Log("Requesting storage permission...");
-                requestStoragePermission();
-                return; // Exit and wait for permission
-            }
-        #endif
-        
             // Get current time to generate a unique filename
             std::time_t t = std::time(nullptr);
             std::tm tm = *std::localtime(&t);
             std::ostringstream filename;
             
-        #ifdef __ANDROID__
-            // For Android, we'll just use the filename part without the path
-            // as the MediaStore API will handle the storage location
             filename << "screenshot-" 
                      << std::put_time(&tm, "%Y-%m-%d-%H-%M-%S-") << std::rand() % 1000 
                      << ".png";
-        #else
-            filename << "screenshot-" 
-                     << std::put_time(&tm, "%Y-%m-%d-%H-%M-%S-") << std::rand() % 1000 
-                     << ".png";
-        #endif
-        
+            
             // Calculate the bounding box of the rendering area from both sprite and pixel rectangles  
             int minX = INT_MAX, minY = INT_MAX, maxX = INT_MIN, maxY = INT_MIN;
         
@@ -1158,24 +1074,12 @@ n为行扫描计数，[0xF03B] = ( ( n / ( [0xF036] == 0 ? 64 : [0xF035] ) ) % 2
                     screenSurface->pixels, screenSurface->pitch) == 0) {
                     
         #ifdef __ANDROID__
-                    int apiLevel = getAndroidApiLevel();
-                    // For Android 10+, use MediaStore API
-                    if (apiLevel >= 29) {
-                        auto str = filename.str();
-                        bool success = saveImageToMediaStore(screenSurface->pixels, screenSurface->w, screenSurface->h, screenSurface->pitch, str.c_str());
-                        if (!success) {
-                            SDL_Log("Error saving screenshot using MediaStore API");
-                        } else {
-                            SDL_Log("Screenshot saved successfully with MediaStore API");
-                        }
+                    auto str = filename.str();
+                    bool success = saveImageToMediaStore(screenSurface->pixels, screenSurface->w, screenSurface->h, screenSurface->pitch, str.c_str());
+                    if (!success) {
+                        SDL_Log("Error saving screenshot using MediaStore API");
                     } else {
-                        // For older Android, use the traditional file path
-                        std::string fullPath = "/storage/emulated/0/Pictures/" + filename.str();
-                        if (IMG_SavePNG(screenSurface, fullPath.c_str()) != 0) {
-                            SDL_Log("Error saving screenshot: %s", IMG_GetError());
-                        } else {
-                            SDL_Log("Screenshot saved to %s", fullPath.c_str());
-                        }
+                        SDL_Log("Screenshot saved successfully with MediaStore API");
                     }
         #else
                     auto str = filename.str();

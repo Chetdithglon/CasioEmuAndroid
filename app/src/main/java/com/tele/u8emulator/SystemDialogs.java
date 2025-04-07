@@ -3,7 +3,6 @@ package com.tele.u8emulator;
 import android.app.Activity;
 import android.content.Intent;
 import android.net.Uri;
-import android.os.Build;
 
 public class SystemDialogs {
     public static void openFileDialog(Activity activity) {

@@ -1,6 +1,8 @@
 package com.tele.u8emulator;
 
+import org.libsdl.app.SDLActivity;
 import android.os.Vibrator;
+import android.os.Environment;
 import android.os.Build;
 import android.app.Activity;
 import android.net.Uri;
@@ -13,15 +15,15 @@ import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
+import android.media.MediaScannerConnection;
 import android.util.Log;
-import android.os.Build;
-import org.libsdl.app.SDLActivity;
 import android.graphics.Bitmap;
 import android.widget.Toast;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.nio.ByteBuffer;
-
 
 public class Game extends SDLActivity {
     private static final String TAG = "Game";
@@ -86,55 +88,90 @@ public class Game extends SDLActivity {
     }
 
     public boolean saveImageToMediaStore(ByteBuffer buffer, int width, int height, int pitch, String filename) {
-        ContentValues values = new ContentValues();
-        values.put(MediaStore.Images.Media.DISPLAY_NAME, filename);
-        values.put(MediaStore.Images.Media.MIME_TYPE, "image/png");
-        
+        // Processing for Android 10+
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-            values.put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures");
+            ContentValues values = new ContentValues();
+            values.put(MediaStore.Images.Media.DISPLAY_NAME, filename);
+            values.put(MediaStore.Images.Media.MIME_TYPE, "image/png");
+            values.put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/CasioEmuAndroid");
             values.put(MediaStore.Images.Media.IS_PENDING, 1);
-        }
-        
-        ContentResolver resolver = getContentResolver();
-        Uri imageUri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
-        
-        if (imageUri == null) {
-            Log.e("SDL", "Failed to create new MediaStore record.");
-            return false;
-        }
-        
-        try {
-            OutputStream stream = resolver.openOutputStream(imageUri);
-            if (stream == null) {
-                Log.e("SDL", "Failed to open output stream.");
+            
+            ContentResolver resolver = getContentResolver();
+            Uri imageUri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
+            
+            if (imageUri == null) {
+                Log.e("SDL", "Failed to create new MediaStore record.");
                 return false;
             }
             
-            // Create a bitmap from the buffer
-            Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
-            buffer.rewind();
-            bitmap.copyPixelsFromBuffer(buffer);
-            
-            // Compress and save the bitmap
-            bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream);
-            stream.close();
-            
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            try {
+                OutputStream stream = resolver.openOutputStream(imageUri);
+                if (stream == null) {
+                    Log.e("SDL", "Failed to open output stream.");
+                    return false;
+                }
+                
+                // Create a bitmap from the buffer
+                Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+                buffer.rewind();
+                bitmap.copyPixelsFromBuffer(buffer);
+                
+                // Compress and save the bitmap
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream);
+                stream.close();
+                
                 values.clear();
                 values.put(MediaStore.Images.Media.IS_PENDING, 0);
                 resolver.update(imageUri, values, null, null);
+                
+                runOnUiThread(() -> Toast.makeText(this, "Screenshot saved to Pictures/CasioEmuAndroid folder", Toast.LENGTH_SHORT).show());
+                
+                return true;
+            } catch (IOException e) {
+                Log.e("SDL", "Error saving bitmap: " + e.getMessage());
+                resolver.delete(imageUri, null, null);
+                return false;
             }
-            
-            // Show a toast notification
-            runOnUiThread(() -> Toast.makeText(this, "Screenshot saved to Pictures folder", Toast.LENGTH_SHORT).show());
-            
-            return true;
-        } catch (IOException e) {
-            Log.e("SDL", "Error saving bitmap: " + e.getMessage());
-            
-            // If there was an error, delete the new media item
-            resolver.delete(imageUri, null, null);
-            return false;
+        } 
+        // Handling for Android 9 and lower
+        else {
+            try {
+                Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+                buffer.rewind();
+                bitmap.copyPixelsFromBuffer(buffer);
+                
+                File picturesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES);
+                File casioDir = new File(picturesDir, "CasioEmuAndroid");
+                
+                if (!casioDir.exists()) {
+                    boolean dirCreated = casioDir.mkdirs();
+                    if (!dirCreated) {
+                        Log.e("SDL", "Failed to create directory: " + casioDir.getAbsolutePath());
+                        casioDir = picturesDir;
+                    }
+                }
+                
+                File imageFile = new File(casioDir, filename);
+                FileOutputStream fos = new FileOutputStream(imageFile);
+                
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, fos);
+                fos.flush();
+                fos.close();
+
+                MediaScannerConnection.scanFile(this,
+                        new String[] { imageFile.getAbsolutePath() }, null,
+                        (path, uri) -> {
+                            Log.d("SDL", "Scanned: " + path);
+                            Log.d("SDL", "Uri: " + uri);
+                        });
+                
+                runOnUiThread(() -> Toast.makeText(this, "Screenshot saved to Pictures/CasioEmuAndroid folder", Toast.LENGTH_SHORT).show());
+                
+                return true;
+            } catch (IOException e) {
+                Log.e("SDL", "Error saving bitmap: " + e.getMessage());
+                return false;
+            }
         }
     }
 
@@ -202,21 +239,6 @@ public class Game extends SDLActivity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        
-        if (requestCode == PermissionManager.MANAGE_STORAGE_REQUEST_CODE) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                if (PermissionManager.hasAllPermissions(this)) {
-                    processPendingOperations();
-                } else {
-                    Log.e(TAG, "User denied MANAGE_EXTERNAL_STORAGE permission");
-                    onExportFailed();
-                    pendingUri = null;
-                    pendingData = null;
-                    pendingRequestCode = -1;
-                }
-            }
-            return;
-        }
         
         if (resultCode == Activity.RESULT_OK && data != null && data.getData() != null) {
             Uri uri = data.getData();
