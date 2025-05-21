@@ -74,10 +74,6 @@ public:
 };
 class IChipset {
 public:
-	/// <summary>
-	/// Raise an interrupt.
-	/// </summary>
-	/// <param name="index"></param>
 	virtual void RaiseInterrupt(int index) = 0;
 	virtual void Tick() = 0;
 	enum struct RunStatus {
@@ -87,6 +83,10 @@ public:
 	};
 	virtual void SetStatus(RunStatus status) = 0;
 	virtual RunStatus GetStatus() = 0;
+
+	// Version 1
+	virtual void* GetRom() = 0;
+	virtual size_t GetRomSize() = 0;
 };
 #ifndef _NO_FUND_API
 class UIWindow {

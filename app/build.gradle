@@ -23,9 +23,7 @@ android {
             //    abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64'
             //}
              cmake {
-                 arguments "-DANDROID_APP_PLATFORM=android-24",
-                          "-DANDROID_CPP_FEATURES=rtti exceptions"
-                 //abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86_64'
+                 arguments "-DANDROID_CPP_FEATURES=rtti exceptions"
                  abiFilters 'arm64-v8a'
              }
         }
@@ -45,7 +43,19 @@ android {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
+        debug {
+            signingConfig signingConfigs.release
+            applicationIdSuffix '.debug'
+            versionNameSuffix '-debug'
+            minifyEnabled false
+        }
     }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
+    }
+    
     applicationVariants.all { variant ->
         tasks["merge${variant.name.capitalize()}Assets"]
             .dependsOn("externalNativeBuild${variant.name.capitalize()}")
